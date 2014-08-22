@@ -16,17 +16,17 @@ unsigned int lowSpace = 263;
 unsigned int hiSpace = 553;
 unsigned int startStopSpace = 1026;
 unsigned int delays[4] = {128, 160, 192, 224};
-/* unsigned int delays[4][5] = */
-/*     { */
-/*         {48, 80, 80, 128, 128}, */
-/*         {32, 80, 80, 160, 160}, */
-/*         {16, 80, 80, 192, 192}, */
-/*         {0, 80, 80, 224, 224} */
-/*     }; */
 byte messageBuffer[64];
+unsigned int bytesRead;
+unsigned int messageStart;
 unsigned int messageLength;
 String title;
 String content;
+/* byte ack[15] = {0x0d, 0x00, 0x01, 0x00, 0x81, 0x9e, 0x03, 0x6f, 0x6b, 0x00, 0x03, 0x00, 0x6f, 0x6b, 0x00}; */
+/* unsigned int ackLength = 15; */
+byte ackTrue[13] = {0x0b, 0x00, 0x01, 0x00, 0x81, 0x9e, 0x03, 0x6f, 0x6b, 0x00, 0x01, 0x00, 0x01};
+byte ackFalse[13] = {0x0b, 0x00, 0x01, 0x00, 0x81, 0x9e, 0x03, 0x6f, 0x6b, 0x00, 0x01, 0x00, 0x00};
+unsigned int ackLength = 13;
 
 // Power for blue, red respectively for each channel
 int commandHistory[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
@@ -72,7 +72,7 @@ void setPowerNibble() {
         power = -8;
     }
     /* Need the 2's complement for the protocol */
-    if (power < 0) {   
+    if (power < 0) {
         power += 16;
     }
     for (int i = 0; i < 4; i++) {
@@ -143,8 +143,8 @@ void printSendBuffer() {
 }
 
 void sendIR() {
-    irsend.sendRaw(sendBuffer, 36, 38);
-    delay(80);
+    /* irsend.sendRaw(sendBuffer, 36, 38); */
+    /* delay(80); */
     irsend.sendRaw(sendBuffer, 36, 38);
     delay(delays[channel] - packetTime/1000);
     /* for (int i = 0; i < 5; i++) { */
@@ -155,48 +155,46 @@ void sendIR() {
 }
 
 boolean findIdCode() {
-    for (int i = 0; i < 64; i++) {
-        messageBuffer[i] = bluetooth.read();
-        /* Serial.print(messageBuffer[i]); */
-        /* Serial.print(" "); */
-        // Check that we found the id code and also have the message length, which
-        // comes 4 bytes before the id code
-        if ((i > 4) && (messageBuffer[i] == 0x9e) && (messageBuffer[i - 1] == 0x81)) {
+    // Check that we found the id code and also have the message length, which
+    // comes 4 bytes before the id code
+    for (int i = 5; i < bytesRead; i++) {
+        if ((messageBuffer[i] == 0x9e) && (messageBuffer[i - 1] == 0x81)) {
             messageLength = word(messageBuffer[i - 4], messageBuffer[i - 5]) - 4;
-            if (messageLength < 65) {
+            messageStart = i - 3;
+            // Check that message is fully within bytes read
+            if (messageStart + messageLength  - 1 < bytesRead) {
                 return true;
             }
-        }
-        else if (messageBuffer[i] == -1) {
-            return false;
         }
     }
     return false;
 }
 
-void readMessage() {
-    for (int i = 0; i < messageLength; i++) {
-        messageBuffer[i] = bluetooth.read();
-    }
-}
+/* void readMessage() { */
+/*     for (int i = 0; i < messageLength; i++) { */
+/*         messageBuffer[i] = bluetooth.read(); */
+/*     } */
+/* } */
 
-void getMessageTitle() {
+void getMessageTitleAndContent() {
+    // Title begins after 4 id bytes and 1 title length byte
+    unsigned int titleStart = messageStart + 5;
+    unsigned int titleLength = messageBuffer[titleStart - 1];
     title = "";
-    if (messageBuffer[0] < 10) {
-        for (int i = 0; i < messageBuffer[0] - 1; i++) {
-            title += (char)messageBuffer[1 + i];
+    if (titleLength < 10) {
+        /* Ignore last character, which is a null */
+        for (int i = titleStart; i < titleStart + titleLength - 1; i++) {
+            title += (char)messageBuffer[i];
         }
     }
-}
-
-void getMessageContent() {
-    unsigned int lengthIndex = 1 + messageBuffer[0];
-    word contentLength = word(messageBuffer[lengthIndex + 1], messageBuffer[lengthIndex]);
+    // Content begins after title and 2 content length bytes
+    unsigned int contentStart = titleStart + titleLength + 2;
+    unsigned int contentLength = word(messageBuffer[contentStart - 1], messageBuffer[contentStart - 2]);
     content = "";
-    if (contentLength == 5) {
+    if (contentLength < 10) {
         /* Ignore last character, which is a null */
-        for (int i = 0; i < contentLength - 1; i++) {
-            content += (char)messageBuffer[lengthIndex + 2 + i];
+        for (int i = contentStart; i < contentStart + contentLength - 1; i++) {
+            content += (char)messageBuffer[i];
         }
     }
 }
@@ -223,22 +221,33 @@ void setup() {
     pinMode(13, OUTPUT);
 }
 
+void readBuffer() {
+    bytesRead = bluetooth.available();
+    for (int i = 0; i < bytesRead; i++) {
+        messageBuffer[i] = bluetooth.read();
+    }
+}
+
+void sendAck() {
+    bluetooth.write(ackTrue, ackLength);
+    bluetooth.write(ackFalse, ackLength);
+}
+
 void loop() {
-    delay(100);
-    if (bluetooth.available()) {
+    if (bluetooth.available() > 0) {
+        readBuffer();
         if (findIdCode()) {
-            readMessage();
-            /* getMessageTitle(); */
-            getMessageContent();
-            /* Serial.print("Command: "); */
-            /* Serial.println(content); */
+            getMessageTitleAndContent();
             if (parseCmd()) {
                 buildSendBuffer();
                 sendIR();
-                /* Serial.print("Send cmd: "); */
-                /* Serial.println(content); */
             }
         }
+        sendAck();
+    }
+    else {
+        sendAck();
+        delay(40);
     }
     if (bluetooth.overflow()) {
         digitalWrite(13, HIGH);

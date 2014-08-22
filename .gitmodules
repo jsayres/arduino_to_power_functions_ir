@@ -1,0 +1,6 @@
+[submodule "lib/MsTimer2"]
+	path = lib/MsTimer2
+	url = https://github.com/PaulStoffregen/MsTimer2.git
+[submodule "lib/IRremote"]
+	path = lib/IRremote
+	url = https://github.com/shirriff/Arduino-IRremote.git
